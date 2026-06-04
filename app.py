@@ -122,18 +122,20 @@ if st.button("🚀 Generate Schedule"):
         st.error("Add at least one venue")
     else:
 
-        all_times = set()
+        # ✅ FIXED FULL DAY SCHEDULE
+        start_time = datetime.strptime("06:00", "%H:%M")
+        end_time = datetime.strptime("23:45", "%H:%M")
 
-        for v in venues:
-            current = datetime.combine(datetime.today(), v["open"])
-            end = datetime.combine(datetime.today(), v["close"])
+        timeslots = []
+        current = start_time
 
-            while current <= end:
-                all_times.add(current.strftime("%H:%M"))
-                current += timedelta(hours=1)
+        while current <= end_time:
+            timeslots.append(current.strftime("%H:%M"))
+            current += timedelta(minutes=15)
 
-        timeslots = sorted(all_times)
-
+        # -------------------------
+        # MODEL
+        # -------------------------
         model = cp_model.CpModel()
         x = {}
 
@@ -142,6 +144,9 @@ if st.button("🚀 Generate Schedule"):
                 for v in range(len(venues)):
                     x[(s, t, v)] = model.NewBoolVar(f"x_{s}_{t}_{v}")
 
+        # -------------------------
+        # CONSTRAINTS
+        # -------------------------
         for t in range(len(timeslots)):
             for v in range(len(venues)):
                 time_obj = datetime.strptime(timeslots[t], "%H:%M").time()
@@ -157,11 +162,19 @@ if st.button("🚀 Generate Schedule"):
 
         for s in range(len(staff)):
             for t in range(len(timeslots)):
-                model.Add(sum(x[(s, t, v)] for v in range(len(venues))) <= 1)
+                model.Add(
+                    sum(x[(s, t, v)] for v in range(len(venues))) <= 1
+                )
 
+        # -------------------------
+        # SOLVE
+        # -------------------------
         solver = cp_model.CpSolver()
         status = solver.Solve(model)
 
+        # -------------------------
+        # OUTPUT
+        # -------------------------
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
 
             st.subheader("📊 Manager Dashboard")
