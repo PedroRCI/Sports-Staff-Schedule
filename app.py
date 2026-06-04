@@ -71,12 +71,15 @@ KNOWN_VENUES = [
 def detect_venues(df):
     venues = set()
 
-    flat = df.astype(str).values.flatten()
+    flat = df.values.flatten()
 
     for val in flat:
-        for v in KNOWN_VENUES:
-            if v.lower() in val.lower():
-                venues.add(v.title())
+        if isinstance(val, str):  # ✅ only check strings
+            val_str = val.lower()
+
+            for v in KNOWN_VENUES:
+                if v.lower() in val_str:
+                    venues.add(v.title())
 
     return list(venues)
 
