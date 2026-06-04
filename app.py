@@ -8,10 +8,12 @@ st.title("🚢 Cruise Sports Scheduler")
 # -------------------------
 # STAFF INPUT
 # -------------------------
-staff = st.text_area(
-    "Enter Staff (one per line)",
-    "Alice\nBob\nCarlos\nDiana"
-).split("\n")
+staff = [
+    s.strip() for s in st.text_area(
+        "Enter Staff (one per line)",
+        "Alice\nBob\nCarlos\nDiana"
+    ).split("\n") if s.strip()
+]
 
 # -------------------------
 # VENUE BUILDER
@@ -30,25 +32,28 @@ with col2:
     open_time = st.time_input("Open")
     close_time = st.time_input("Close")
 
-# Session state
+# Storage
 if "venues" not in st.session_state:
     st.session_state.venues = []
 
-# Add venue button
+# Add venue
 if st.button("➕ Add Venue"):
-    st.session_state.venues.append({
-        "name": selected_venue,
-        "min_staff": min_staff,
-        "open": open_time,
-        "close": close_time
-    })
-    st.success(f"{selected_venue} added")
+    if open_time < close_time:
+        st.session_state.venues.append({
+            "name": selected_venue,
+            "min_staff": min_staff,
+            "open": open_time,
+            "close": close_time
+        })
+        st.success(f"{selected_venue} added")
+    else:
+        st.error("Close time must be after open time")
 
-# Clear button (VERY useful)
+# Clear
 if st.button("🗑️ Clear Venues"):
     st.session_state.venues = []
 
-# Show venues nicely
+# Show venues
 st.subheader("📋 Current Plan")
 for i, v in enumerate(st.session_state.venues):
     st.write(
@@ -57,19 +62,17 @@ for i, v in enumerate(st.session_state.venues):
     )
 
 # -------------------------
-# GENERATE
+# GENERATE SCHEDULE
 # -------------------------
 if st.button("🚀 Generate Schedule"):
 
     venues = st.session_state.venues
 
-    if len(venues) == 0:
+    if not venues:
         st.error("Please add at least one venue.")
     else:
 
-        # -------------------------
-        # CREATE HOURLY TIMES
-        # -------------------------
+        # Create hourly slots
         all_times = set()
 
         for v in venues:
@@ -82,16 +85,14 @@ if st.button("🚀 Generate Schedule"):
 
         timeslots = sorted(all_times)
 
-        # -------------------------
-        # MODEL
-        # -------------------------
+        # Model
         model = cp_model.CpModel()
 
         x = {}
         for s in range(len(staff)):
             for t in range(len(timeslots)):
                 for v in range(len(venues)):
-                    x[s, t, v] = model.NewBoolVar(f"x_{s}_{t}_{v}")
+                    x[(s, t, v)] = model.NewBoolVar(f"x_{s}_{t}_{v}")
 
         # Constraints
         for t in range(len(timeslots)):
@@ -100,29 +101,30 @@ if st.button("🚀 Generate Schedule"):
 
                 if venues[v]["open"] <= time_obj <= venues[v]["close"]:
                     model.Add(
-                        sum(x[s, t, v] for s in range(len(staff)))
+                        sum(x[(s, t, v)] for s in range(len(staff)))
                         >= venues[v]["min_staff"]
                     )
                 else:
                     for s in range(len(staff)):
-                        model.Add(x[s, t, v] == 0)
+                        model.Add(x[(s, t, v)] == 0)
 
+        # One job per person per time
         for s in range(len(staff)):
             for t in range(len(timeslots)):
-                model.Add(sum(x[s, t, v] for v in range(len(venues))) <= 1)
+                model.Add(
+                    sum(x[(s, t, v)] for v in range(len(venues))) <= 1
+                )
 
         # Solve
         solver = cp_model.CpSolver()
         status = solver.Solve(model)
 
-        # -------------------------
-        # CLEAN MANAGER TABLE ✅
-        # -------------------------
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
 
+            # ✅ CLEAN MANAGER TABLE
             st.subheader("📊 Manager Dashboard")
 
-            table_data = []
+            data = []
 
             for t in range(len(timeslots)):
                 row = {"Time": timeslots[t]}
@@ -131,7 +133,7 @@ if st.button("🚀 Generate Schedule"):
                     assigned = [
                         staff[s]
                         for s in range(len(staff))
-                        if solver.Value(x[s, t, v]) == 1
+                        if solver.Value(x[(s, t, v)]) == 1
                     ]
 
                     if len(assigned) >= venues[v]["min_staff"]:
@@ -139,33 +141,27 @@ if st.button("🚀 Generate Schedule"):
                     else:
                         row[venues[v]["name"]] = "❌"
 
-                table_data.append(row)
+                data.append(row)
 
-            df = pd.DataFrame(table_data)
+            df = pd.DataFrame(data)
             st.dataframe(df, use_container_width=True)
 
-            # -------------------------
-            # STAFF VIEW
-            # -------------------------
+            # ✅ STAFF VIEW
             st.subheader("🧑‍🤝‍🧑 Staff Schedules")
 
             for s in range(len(staff)):
-                schedule_lines = []
+                st.write(f"**{staff[s]}**")
+
+                found = False
 
                 for t in range(len(timeslots)):
                     for v in range(len(venues)):
-                        if solver.Value(x[s, t, v]) == 1:
-                            schedule_lines.append(f"{timeslots[t]} → {venues[v]['name']}")
+                        if solver.Value(x[(s, t, v)]) == 1:
+                            st.write(f"{timeslots[t]} → {venues[v]['name']}")
+                            found = True
 
-                st.write(f"**{staff[s]}**")
-                if schedule_lines:
-                    for line in schedule_lines:
-                        st.write(line)
-                else:
+                if not found:
                     st.write("OFF")
-
-        else:
-            st.error("No feasible schedule found.")
 
         else:
             st.error("No feasible schedule found.")
