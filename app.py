@@ -1,16 +1,18 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 
 # -----------------------------------------
 # ✅ READ VOY FILE
 # -----------------------------------------
 def read_voy_excel(file):
-    xls = pd.ExcelFile(file)
+    xls = pd.ExcelFile(file, engine="openpyxl")
+
     voy_sheets = [s for s in xls.sheet_names if "voy" in s.lower()]
 
     frames = []
     for sheet in voy_sheets:
-        df = pd.read_excel(xls, sheet_name=sheet, header=None)
+        df = pd.read_excel(xls, sheet_name=sheet, header=None, engine="openpyxl")
         df["sheet"] = sheet
         frames.append(df)
 
@@ -40,7 +42,6 @@ def extract_schedule(df):
         for j in range(len(df.columns)):
             val = df.iat[i, j]
 
-            # Detect time slot
             if isinstance(val, float) and 0 < val < 1.1:
                 time = convert_decimal_time(val)
 
@@ -61,20 +62,20 @@ def extract_schedule(df):
 
 
 # -----------------------------------------
-# ✅ DETECT VENUES FROM VOY
+# ✅ DETECT VENUES (FIXED VERSION ✅)
 # -----------------------------------------
 KNOWN_VENUES = [
-    "FLOWRIDER", "SKYPAD", "ROCKWALL", "SPORTS COURT",
-    "STUDIO B", "ZIPLINE", "ABYSS", "LASER", "MINI GOLF"
+    "FLOWRIDER", "SKYPAD", "ROCKWALL",
+    "SPORTS COURT", "STUDIO B", "ZIPLINE",
+    "LASER", "MINI GOLF"
 ]
 
 def detect_venues(df):
     venues = set()
-
     flat = df.values.flatten()
 
     for val in flat:
-        if isinstance(val, str):  # ✅ only check strings
+        if isinstance(val, str):
             val_str = val.lower()
 
             for v in KNOWN_VENUES:
@@ -85,7 +86,7 @@ def detect_venues(df):
 
 
 # -----------------------------------------
-# ✅ ASSIGN VENUES TO ACTIVITIES
+# ✅ ASSIGN VENUES
 # -----------------------------------------
 def assign_venues(schedule, venues):
     schedule = schedule.copy()
@@ -99,7 +100,7 @@ def assign_venues(schedule, venues):
 
 
 # -----------------------------------------
-# ✅ STAFF ASSIGNMENT WITH VENUE RULES
+# ✅ STAFF ASSIGNMENT
 # -----------------------------------------
 def assign_staff(schedule, staff_list, venue_requirements):
     staff_load = {s: 0 for s in staff_list}
@@ -107,7 +108,6 @@ def assign_staff(schedule, staff_list, venue_requirements):
 
     for _, row in schedule.iterrows():
         venue = row["venue"]
-
         needed = venue_requirements.get(venue, 1)
 
         assigned = []
@@ -128,78 +128,127 @@ def assign_staff(schedule, staff_list, venue_requirements):
 
 
 # -----------------------------------------
+# ✅ BUILD TIME GRID (7AM → MIDNIGHT)
+# -----------------------------------------
+def build_time_grid():
+    times = []
+    current = datetime.strptime("07:00", "%H:%M")
+    end_time = datetime.strptime("23:59", "%H:%M")
+
+    while current <= end_time:
+        times.append(current.strftime("%H:%M"))
+        current += timedelta(minutes=15)
+
+    return times
+
+
+# -----------------------------------------
+# ✅ BUILD MATRIX VIEW
+# -----------------------------------------
+def build_schedule_matrix(schedule_df, staff_list):
+    time_slots = build_time_grid()
+
+    matrix = pd.DataFrame(index=time_slots, columns=staff_list)
+
+    for _, row in schedule_df.iterrows():
+        time = row["time"]
+        venue = row["venue"]
+        staff_members = row["staff"].split(",")
+
+        for s in staff_members:
+            s = s.strip()
+            if s in matrix.columns and time in matrix.index:
+                matrix.loc[time, s] = venue
+
+    return matrix
+
+
+# -----------------------------------------
+# ✅ COLOR BY VENUE
+# -----------------------------------------
+def color_cells(val):
+    colors = {
+        "Flowrider": "#00BFFF",
+        "Skypad": "#32CD32",
+        "Rockwall": "#FFA500",
+        "Sports Court": "#FF69B4",
+        "Studio B": "#9370DB",
+        "Zipline": "#FFD700",
+        "Laser": "#FF4500"
+    }
+
+    if isinstance(val, str):
+        for k in colors:
+            if k in val:
+                return f"background-color: {colors[k]}; color: black"
+
+    return ""
+
+
+# -----------------------------------------
 # ✅ UI
 # -----------------------------------------
 st.set_page_config(layout="wide")
-
 st.title("🚢 VOY Planner → Smart Staff Scheduler")
 
-tabs = st.tabs(["1️⃣ Upload VOY", "2️⃣ Staff Setup", "3️⃣ Schedule Output"])
+tabs = st.tabs(["1️⃣ Upload VOY", "2️⃣ Staff Setup", "3️⃣ Schedule"])
 
-# -------------------------------
-# TAB 1: UPLOAD
-# -------------------------------
+# -----------------------------------------
+# TAB 1
+# -----------------------------------------
 with tabs[0]:
     uploaded_file = st.file_uploader("Upload VOY file", type=["xlsx", "xlsm"])
 
     if uploaded_file:
-        st.session_state["raw_df"] = read_voy_excel(uploaded_file)
-        st.success("VOY file loaded ✅")
+        df = read_voy_excel(uploaded_file)
+        st.session_state["raw_df"] = df
 
-        # Detect venues
-        venues = detect_venues(st.session_state["raw_df"])
+        venues = detect_venues(df)
         st.session_state["venues"] = venues
 
-        st.write("Detected Venues:")
-        st.write(venues)
+        st.success("✅ File loaded")
+        st.write("Detected Venues:", venues)
 
 
-# -------------------------------
-# TAB 2: STAFF + REQUIREMENTS
-# -------------------------------
+# -----------------------------------------
+# TAB 2
+# -----------------------------------------
 with tabs[1]:
     if "venues" not in st.session_state:
-        st.warning("Upload VOY file first")
+        st.warning("Upload VOY first")
     else:
-        st.subheader("Enter Staff List")
-
         staff_input = st.text_input(
             "Staff names (comma separated)",
-            "John, Maria, Alex, Sam, Chris"
+            "John, Maria, Alex, Sam"
         )
 
         staff_list = [s.strip() for s in staff_input.split(",")]
-
         st.session_state["staff"] = staff_list
 
-        st.subheader("Staff Needed Per Venue")
+        st.subheader("Staff per Venue")
 
         venue_requirements = {}
 
         for v in st.session_state["venues"]:
             venue_requirements[v] = st.number_input(
-                f"{v} staff needed",
-                min_value=1,
-                max_value=10,
-                value=2,
-                key=v
+                f"{v}",
+                1, 10, 2, key=v
             )
 
         st.session_state["venue_requirements"] = venue_requirements
 
 
-# -------------------------------
-# TAB 3: GENERATE SCHEDULE
-# -------------------------------
+# -----------------------------------------
+# TAB 3
+# -----------------------------------------
 with tabs[2]:
     if "raw_df" not in st.session_state:
         st.warning("Upload VOY first")
     elif "staff" not in st.session_state:
-        st.warning("Add staff first")
+        st.warning("Set staff first")
     else:
         if st.button("Generate Schedule"):
             schedule = extract_schedule(st.session_state["raw_df"])
-
             schedule = assign_venues(schedule, st.session_state["venues"])
 
             final = assign_staff(
@@ -208,10 +257,9 @@ with tabs[2]:
                 st.session_state["venue_requirements"]
             )
 
-            st.dataframe(final, use_container_width=True)
+            matrix = build_schedule_matrix(final, st.session_state["staff"])
 
-            st.download_button(
-                "Download CSV",
-                final.to_csv(index=False),
-                file_name="schedule.csv"
-            )
+            st.subheader("📅 Schedule Grid")
+
+            styled = matrix.style.map(color_cells)
+            st.dataframe(styled, use_container_width=True)
