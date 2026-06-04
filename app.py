@@ -12,7 +12,6 @@ venues_input = st.text_area(
     "Enter Venues (name,min staff,open,close)",
     "Basketball,2,09:00,17:00\nPool Games,2,10:00,18:00"
 )
-``
 
 venues = []
 all_times = set()
