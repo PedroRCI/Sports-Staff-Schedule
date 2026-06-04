@@ -16,11 +16,21 @@ staff = [
 ]
 
 # -------------------------
+# CUSTOM VENUE OPTIONS ✅
+# -------------------------
+st.subheader("⚙️ Manage Venue Types")
+
+venue_list_input = st.text_area(
+    "Edit Available Venues (one per line)",
+    "Basketball\nPool Games\nSoccer\nTennis\nVolleyball"
+)
+
+venue_options = [v.strip() for v in venue_list_input.split("\n") if v.strip()]
+
+# -------------------------
 # VENUE BUILDER
 # -------------------------
 st.subheader("🏟️ Add Venues")
-
-venue_options = ["Basketball", "Pool Games", "Soccer", "Tennis", "Volleyball"]
 
 col1, col2 = st.columns(2)
 
@@ -49,17 +59,55 @@ if st.button("➕ Add Venue"):
     else:
         st.error("Close time must be after open time")
 
-# Clear
-if st.button("🗑️ Clear Venues"):
-    st.session_state.venues = []
-
-# Show venues
+# -------------------------
+# EDIT / DELETE VENUES ✅
+# -------------------------
 st.subheader("📋 Current Plan")
+
 for i, v in enumerate(st.session_state.venues):
-    st.write(
-        f"{i+1}. {v['name']} | Staff: {v['min_staff']} | "
-        f"{v['open'].strftime('%H:%M')} - {v['close'].strftime('%H:%M')}"
-    )
+
+    col1, col2, col3 = st.columns([3, 1, 1])
+
+    with col1:
+        st.write(
+            f"{v['name']} | Staff: {v['min_staff']} | "
+            f"{v['open'].strftime('%H:%M')} - {v['close'].strftime('%H:%M')}"
+        )
+
+    with col2:
+        if st.button(f"✏️ Edit {i}"):
+            st.session_state.edit_index = i
+
+    with col3:
+        if st.button(f"❌ Delete {i}"):
+            st.session_state.venues.pop(i)
+            st.experimental_rerun()
+
+# -------------------------
+# EDIT MODE ✅
+# -------------------------
+if "edit_index" in st.session_state:
+
+    idx = st.session_state.edit_index
+    v = st.session_state.venues[idx]
+
+    st.subheader("✏️ Edit Venue")
+
+    new_name = st.selectbox("Venue Name", venue_options, index=venue_options.index(v["name"]))
+    new_staff = st.number_input("Min Staff", 1, 10, v["min_staff"])
+    new_open = st.time_input("Open Time", v["open"])
+    new_close = st.time_input("Close Time", v["close"])
+
+    if st.button("💾 Save Changes"):
+        st.session_state.venues[idx] = {
+            "name": new_name,
+            "min_staff": new_staff,
+            "open": new_open,
+            "close": new_close
+        }
+        del st.session_state.edit_index
+        st.success("Updated!")
+        st.experimental_rerun()
 
 # -------------------------
 # GENERATE SCHEDULE
@@ -87,8 +135,8 @@ if st.button("🚀 Generate Schedule"):
 
         # Model
         model = cp_model.CpModel()
-
         x = {}
+
         for s in range(len(staff)):
             for t in range(len(timeslots)):
                 for v in range(len(venues)):
@@ -108,12 +156,9 @@ if st.button("🚀 Generate Schedule"):
                     for s in range(len(staff)):
                         model.Add(x[(s, t, v)] == 0)
 
-        # One job per person per time
         for s in range(len(staff)):
             for t in range(len(timeslots)):
-                model.Add(
-                    sum(x[(s, t, v)] for v in range(len(venues))) <= 1
-                )
+                model.Add(sum(x[(s, t, v)] for v in range(len(venues))) <= 1)
 
         # Solve
         solver = cp_model.CpSolver()
@@ -121,7 +166,6 @@ if st.button("🚀 Generate Schedule"):
 
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
 
-            # ✅ CLEAN MANAGER TABLE
             st.subheader("📊 Manager Dashboard")
 
             data = []
@@ -146,22 +190,6 @@ if st.button("🚀 Generate Schedule"):
             df = pd.DataFrame(data)
             st.dataframe(df, use_container_width=True)
 
-            # ✅ STAFF VIEW
-            st.subheader("🧑‍🤝‍🧑 Staff Schedules")
-
-            for s in range(len(staff)):
-                st.write(f"**{staff[s]}**")
-
-                found = False
-
-                for t in range(len(timeslots)):
-                    for v in range(len(venues)):
-                        if solver.Value(x[(s, t, v)]) == 1:
-                            st.write(f"{timeslots[t]} → {venues[v]['name']}")
-                            found = True
-
-                if not found:
-                    st.write("OFF")
-
         else:
             st.error("No feasible schedule found.")
+``
