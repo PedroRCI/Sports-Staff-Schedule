@@ -9,50 +9,52 @@ staff = st.text_area(
 ).split("\n")
 
 venues_input = st.text_area(
-    "Enter Venues (name,min staff)",
-    "Basketball,2\nPool Games,2"
+    "Enter Venues (name,min staff,open,close)",
+    "Basketball,2,09:00,17:00\nPool Games,2,10:00,18:00"
 )
+``
 
 venues = []
+all_times = set()
+
 for line in venues_input.split("\n"):
-    name, min_staff = line.split(",")
-    venues.append({"name": name, "min_staff": int(min_staff)})
+    parts = line.split(",")
 
-timeslots = ["09:00", "13:00", "17:00"]
+    if len(parts) == 4:
+        name = parts[0].strip()
+        try:
+            min_staff = int(parts[1].strip())
+            open_time = parts[2].strip()
+            close_time = parts[3].strip()
 
-if st.button("Generate Schedule"):
+            venues.append({
+                "name": name,
+                "min_staff": min_staff,
+                "open": open_time,
+                "close": close_time
+            })
 
-    model = cp_model.CpModel()
+            # collect times
+            all_times.add(open_time)
+            all_times.add(close_time)
 
-    x = {}
-    for s in range(len(staff)):
-        for t in range(len(timeslots)):
-            for v in range(len(venues)):
-                x[s, t, v] = model.NewBoolVar(f"x_{s}_{t}_{v}")
+        except:
+            st.warning(f"Invalid line: {line}")
 
-    for t in range(len(timeslots)):
-        for v in range(len(venues)):
-            model.Add(sum(x[s, t, v] for s in range(len(staff))) >= venues[v]["min_staff"])
+# create sorted timeslots
+timeslots = sorted(all_times)
 
-    for s in range(len(staff)):
-        for t in range(len(timeslots)):
-            model.Add(sum(x[s, t, v] for v in range(len(venues))) <= 1)
+for t in range(len(timeslots)):
+    for v in range(len(venues)):
 
-    solver = cp_model.CpSolver()
-    status = solver.Solve(model)
+        time = timeslots[t]
 
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-
-        st.subheader("📊 Schedule")
-
-        for t in range(len(timeslots)):
-            st.write(f"### {timeslots[t]}")
-            for v in range(len(venues)):
-                assigned = [
-                    staff[s]
-                    for s in range(len(staff))
-                    if solver.Value(x[s, t, v]) == 1
-                ]
-                st.write(f"{venues[v]['name']}: {assigned}")
-    else:
-        st.error("No schedule possible")
+        if venues[v]["open"] <= time <= venues[v]["close"]:
+            model.Add(
+                sum(x[s, t, v] for s in range(len(staff)))
+                >= venues[v]["min_staff"]
+            )
+        else:
+            for s in range(len(staff)):
+                model.Add(x[s, t, v] == 0)
+``
