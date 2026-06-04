@@ -56,4 +56,3 @@ for t in range(len(timeslots)):
         else:
             for s in range(len(staff)):
                 model.Add(x[s, t, v] == 0)
-``
