@@ -1,202 +1,152 @@
 import streamlit as st
-from ortools.sat.python import cp_model
-from datetime import datetime, timedelta
 import pandas as pd
 
-st.title("🚢 Cruise Sports Scheduler")
+# -----------------------------------------
+# ✅ 1. READ VOY FILE (ALL VOY TABS)
+# -----------------------------------------
+def read_voy_excel(file):
+    xls = pd.ExcelFile(file)
+    
+    voy_sheets = [s for s in xls.sheet_names if "voy" in s.lower()]
+    
+    frames = []
+    for sheet in voy_sheets:
+        df = pd.read_excel(xls, sheet_name=sheet, header=None)
+        df["source_sheet"] = sheet
+        frames.append(df)
 
-# -------------------------
-# STAFF INPUT
-# -------------------------
-staff = [
-    s.strip() for s in st.text_area(
-        "Enter Staff (one per line)",
-        "Alice\nBob\nCarlos\nDiana"
-    ).split("\n") if s.strip()
-]
+    return pd.concat(frames, ignore_index=True)
 
-# -------------------------
-# VENUE TYPES (EDITABLE)
-# -------------------------
-st.subheader("⚙️ Venue Types")
 
-venue_text = st.text_area(
-    "Edit available venues (one per line)",
-    "Basketball\nPool Games\nSoccer\nTennis"
-)
+# -----------------------------------------
+# ✅ 2. CONVERT DECIMAL TIME → HH:MM
+# -----------------------------------------
+def convert_decimal_time(decimal):
+    try:
+        seconds = float(decimal) * 24 * 3600
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours:02}:{minutes:02}"
+    except:
+        return None
 
-venue_options = [v.strip() for v in venue_text.split("\n") if v.strip()]
 
-# -------------------------
-# ADD VENUE
-# -------------------------
-st.subheader("🏟️ Add Venue")
+# -----------------------------------------
+# ✅ 3. EXTRACT SCHEDULE GRID FROM VOY
+# -----------------------------------------
+def extract_schedule_grid(df):
+    rows = []
 
-col1, col2 = st.columns(2)
+    for i in range(len(df)):
+        for j in range(len(df.columns)):
+            value = df.iat[i, j]
 
-with col1:
-    selected_venue = st.selectbox("Venue", venue_options)
-    min_staff = st.number_input("Min Staff", 1, 10, 2)
+            # ✅ detect time slot (fractional)
+            if isinstance(value, float) and 0 < value < 1.1:
+                time = convert_decimal_time(value)
 
-with col2:
-    open_time = st.time_input("Open Time")
-    close_time = st.time_input("Close Time")
+                # look ahead for activities (VOY structure)
+                activities = []
+                for k in range(1, 6):
+                    if i + k < len(df):
+                        next_row = df.iloc[i + k].dropna().values
+                        activities.extend(next_row)
 
-if "venues" not in st.session_state:
-    st.session_state.venues = []
+                for act in activities:
+                    if isinstance(act, str) and len(act.strip()) > 2:
+                        rows.append({
+                            "time": time,
+                            "activity": act.strip()
+                        })
 
-if st.button("➕ Add Venue"):
-    if open_time < close_time:
-        st.session_state.venues.append({
-            "name": selected_venue,
-            "min_staff": min_staff,
-            "open": open_time,
-            "close": close_time
+    return pd.DataFrame(rows)
+
+
+# -----------------------------------------
+# ✅ 4. ASSIGN VENUES (BASED ON VOY PATTERN)
+# -----------------------------------------
+VENUES = ["Flowrider", "Skypad", "Rockwall", "Sports Court"]
+
+def assign_venues(df):
+    df = df.copy()
+    df["venue"] = [VENUES[i % len(VENUES)] for i in range(len(df))]
+    return df
+
+
+# -----------------------------------------
+# ✅ 5. SMART STAFF ASSIGNMENT
+# -----------------------------------------
+def assign_staff(schedule_df, staff_list, staff_per_activity):
+    staff_load = {s: 0 for s in staff_list}
+    result = []
+
+    for _, row in schedule_df.iterrows():
+        assigned_staff = []
+
+        for _ in range(staff_per_activity):
+            # pick least-busy staff
+            staff = sorted(staff_load, key=staff_load.get)[0]
+            staff_load[staff] += 1
+            assigned_staff.append(staff)
+
+        result.append({
+            "time": row["time"],
+            "venue": row["venue"],
+            "activity": row["activity"],
+            "staff": ", ".join(assigned_staff)
         })
-        st.success("Venue added")
+
+    return pd.DataFrame(result)
+
+
+# -----------------------------------------
+# ✅ STREAMLIT UI
+# -----------------------------------------
+st.title("🚢 VOY Planner → Daily Sports Schedule")
+
+uploaded_file = st.file_uploader("Upload VOY Excel File", type=["xlsx", "xlsm"])
+
+if uploaded_file:
+    st.success("File uploaded successfully ✅")
+
+    # Read file
+    raw_df = read_voy_excel(uploaded_file)
+
+    # Extract schedule
+    schedule = extract_schedule_grid(raw_df)
+
+    if schedule.empty:
+        st.error("Could not extract schedule. Try another VOY file.")
     else:
-        st.error("Close time must be after open time")
+        schedule = assign_venues(schedule)
 
-# Clear list
-if st.button("🗑️ Clear All Venues"):
-    st.session_state.venues = []
+        # STAFF INPUT
+        st.subheader("Staff Setup")
 
-# -------------------------
-# CURRENT PLAN
-# -------------------------
-st.subheader("📋 Current Plan")
+        staff_input = st.text_input(
+            "Enter staff (comma-separated)",
+            "John, Maria, Alex, Sam, Chris"
+        )
+        staff_list = [s.strip() for s in staff_input.split(",")]
 
-for i, v in enumerate(st.session_state.venues):
-
-    col1, col2, col3 = st.columns([4, 1, 1])
-
-    with col1:
-        st.write(
-            f"{v['name']} | Staff: {v['min_staff']} | "
-            f"{v['open'].strftime('%H:%M')} - {v['close'].strftime('%H:%M')}"
+        staff_per_activity = st.slider(
+            "Staff per activity",
+            min_value=1,
+            max_value=5,
+            value=1
         )
 
-    with col2:
-        if st.button(f"Edit {i}"):
-            st.session_state.edit_index = i
+        # Generate schedule
+        final_schedule = assign_staff(schedule, staff_list, staff_per_activity)
 
-    with col3:
-        if st.button(f"Delete {i}"):
-            st.session_state.venues.pop(i)
-            st.experimental_rerun()
+        # Show results
+        st.subheader("📅 Generated Schedule")
+        st.dataframe(final_schedule, use_container_width=True)
 
-# -------------------------
-# EDIT MODE
-# -------------------------
-if "edit_index" in st.session_state:
-
-    idx = st.session_state.edit_index
-    v = st.session_state.venues[idx]
-
-    st.subheader("✏️ Edit Venue")
-
-    new_name = st.selectbox("Venue", venue_options, index=venue_options.index(v["name"]))
-    new_staff = st.number_input("Min Staff", 1, 10, v["min_staff"])
-    new_open = st.time_input("Open", v["open"])
-    new_close = st.time_input("Close", v["close"])
-
-    if st.button("Save Changes"):
-        st.session_state.venues[idx] = {
-            "name": new_name,
-            "min_staff": new_staff,
-            "open": new_open,
-            "close": new_close
-        }
-        del st.session_state.edit_index
-        st.success("Updated")
-        st.experimental_rerun()
-
-# -------------------------
-# GENERATE SCHEDULE
-# -------------------------
-if st.button("🚀 Generate Schedule"):
-
-    venues = st.session_state.venues
-
-    if not venues:
-        st.error("Add at least one venue")
-    else:
-
-        # ✅ FIXED FULL DAY SCHEDULE
-        start_time = datetime.strptime("06:00", "%H:%M")
-        end_time = datetime.strptime("23:45", "%H:%M")
-
-        timeslots = []
-        current = start_time
-
-        while current <= end_time:
-            timeslots.append(current.strftime("%H:%M"))
-            current += timedelta(minutes=15)
-
-        # -------------------------
-        # MODEL
-        # -------------------------
-        model = cp_model.CpModel()
-        x = {}
-
-        for s in range(len(staff)):
-            for t in range(len(timeslots)):
-                for v in range(len(venues)):
-                    x[(s, t, v)] = model.NewBoolVar(f"x_{s}_{t}_{v}")
-
-        # -------------------------
-        # CONSTRAINTS
-        # -------------------------
-        for t in range(len(timeslots)):
-            for v in range(len(venues)):
-                time_obj = datetime.strptime(timeslots[t], "%H:%M").time()
-
-                if venues[v]["open"] <= time_obj <= venues[v]["close"]:
-                    model.Add(
-                        sum(x[(s, t, v)] for s in range(len(staff)))
-                        >= venues[v]["min_staff"]
-                    )
-                else:
-                    for s in range(len(staff)):
-                        model.Add(x[(s, t, v)] == 0)
-
-        for s in range(len(staff)):
-            for t in range(len(timeslots)):
-                model.Add(
-                    sum(x[(s, t, v)] for v in range(len(venues))) <= 1
-                )
-
-        # -------------------------
-        # SOLVE
-        # -------------------------
-        solver = cp_model.CpSolver()
-        status = solver.Solve(model)
-
-        # -------------------------
-        # OUTPUT
-        # -------------------------
-        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-
-            st.subheader("📊 Manager Dashboard")
-
-            rows = []
-
-            for t in range(len(timeslots)):
-                row = {"Time": timeslots[t]}
-
-                for v in range(len(venues)):
-                    assigned = [
-                        staff[s]
-                        for s in range(len(staff))
-                        if solver.Value(x[(s, t, v)]) == 1
-                    ]
-
-                    row[venues[v]["name"]] = ", ".join(assigned) if assigned else "❌"
-
-                rows.append(row)
-
-            df = pd.DataFrame(rows)
-            st.dataframe(df, use_container_width=True)
-
-        else:
-            st.error("No feasible schedule")
+        # Download
+        csv = final_schedule.to_csv(index=False)
+        st.download_button(
+            "⬇️ Download Schedule",
+            csv,
+            file_name="daily_schedule.csv"
+        )
