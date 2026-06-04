@@ -4,117 +4,120 @@ from ortools.sat.python import cp_model
 st.title("🚢 Cruise Sports Scheduler")
 
 # -------------------------
-# INPUTS
+# STAFF INPUT
 # -------------------------
 staff = st.text_area(
     "Enter Staff (one per line)",
     "Alice\nBob\nCarlos\nDiana"
 ).split("\n")
 
-venues_input = st.text_area(
-    "Enter Venues (name,min staff,open,close)",
-    "Basketball,2,09:00,17:00\nPool Games,2,10:00,18:00"
-)
+# -------------------------
+# VENUE BUILDER UI
+# -------------------------
+st.subheader("🏟️ Add Venues")
+
+venue_options = ["Basketball", "Pool Games", "Soccer", "Tennis", "Volleyball"]
+
+selected_venue = st.selectbox("Select Venue", venue_options)
+min_staff = st.number_input("Minimum Staff Needed", min_value=1, max_value=10, value=2)
+
+open_time = st.time_input("Open Time")
+close_time = st.time_input("Close Time")
+
+# Store venues
+if "venues" not in st.session_state:
+    st.session_state.venues = []
+
+# Add venue button
+if st.button("➕ Add Venue"):
+    st.session_state.venues.append({
+        "name": selected_venue,
+        "min_staff": min_staff,
+        "open": open_time.strftime("%H:%M"),
+        "close": close_time.strftime("%H:%M")
+    })
+
+# Show current venues
+st.subheader("📋 Current Venues")
+for v in st.session_state.venues:
+    st.write(v)
 
 # -------------------------
-# PARSE VENUES
+# GENERATE SCHEDULE
 # -------------------------
-venues = []
-all_times = set()
+if st.button("🚀 Generate Schedule"):
 
-for line in venues_input.split("\n"):
-    parts = line.split(",")
+    venues = st.session_state.venues
 
-    if len(parts) == 4:
-        name = parts[0].strip()
+    if len(venues) == 0:
+        st.error("Please add at least one venue.")
+    else:
 
-        try:
-            min_staff = int(parts[1].strip())
-            open_time = parts[2].strip()
-            close_time = parts[3].strip()
+        # Collect times
+        all_times = set()
+        for v in venues:
+            all_times.add(v["open"])
+            all_times.add(v["close"])
 
-            venues.append({
-                "name": name,
-                "min_staff": min_staff,
-                "open": open_time,
-                "close": close_time
-            })
+        timeslots = sorted(all_times)
 
-            all_times.add(open_time)
-            all_times.add(close_time)
+        model = cp_model.CpModel()
 
-        except:
-            st.warning(f"Invalid line: {line}")
-
-timeslots = sorted(all_times)
-
-# -------------------------
-# GENERATE BUTTON
-# -------------------------
-if st.button("Generate Schedule"):
-
-    # ✅ CREATE MODEL (this fixes your error)
-    model = cp_model.CpModel()
-
-    x = {}
-    for s in range(len(staff)):
-        for t in range(len(timeslots)):
-            for v in range(len(venues)):
-                x[s, t, v] = model.NewBoolVar(f"x_{s}_{t}_{v}")
-
-    # -------------------------
-    # CONSTRAINTS
-    # -------------------------
-    for t in range(len(timeslots)):
-        for v in range(len(venues)):
-
-            time = timeslots[t]
-
-            if venues[v]["open"] <= time <= venues[v]["close"]:
-                model.Add(
-                    sum(x[s, t, v] for s in range(len(staff)))
-                    >= venues[v]["min_staff"]
-                )
-            else:
-                for s in range(len(staff)):
-                    model.Add(x[s, t, v] == 0)
-
-    # Each person only one job at a time
-    for s in range(len(staff)):
-        for t in range(len(timeslots)):
-            model.Add(sum(x[s, t, v] for v in range(len(venues))) <= 1)
-
-    # -------------------------
-    # SOLVE
-    # -------------------------
-    solver = cp_model.CpSolver()
-    status = solver.Solve(model)
-
-    # -------------------------
-    # OUTPUT
-    # -------------------------
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-
-        st.subheader("📊 Manager View")
-
-        for t in range(len(timeslots)):
-            st.write(f"### {timeslots[t]}")
-            for v in range(len(venues)):
-                assigned = [
-                    staff[s]
-                    for s in range(len(staff))
-                    if solver.Value(x[s, t, v]) == 1
-                ]
-                st.write(f"{venues[v]['name']}: {assigned}")
-
-        st.subheader("🧑‍🤝‍🧑 Staff Schedules")
-
+        # Variables
+        x = {}
         for s in range(len(staff)):
-            st.write(f"### {staff[s]}")
             for t in range(len(timeslots)):
                 for v in range(len(venues)):
-                    if solver.Value(x[s, t, v]) == 1:
-                        st.write(f"{timeslots[t]} → {venues[v]['name']}")
+                    x[s, t, v] = model.NewBoolVar(f"x_{s}_{t}_{v}")
 
-    else:
-        st.error("No feasible schedule found.")
+        # Constraints
+        for t in range(len(timeslots)):
+            for v in range(len(venues)):
+                time = timeslots[t]
+
+                if venues[v]["open"] <= time <= venues[v]["close"]:
+                    model.Add(
+                        sum(x[s, t, v] for s in range(len(staff)))
+                        >= venues[v]["min_staff"]
+                    )
+                else:
+                    for s in range(len(staff)):
+                        model.Add(x[s, t, v] == 0)
+
+        # One job per person per time
+        for s in range(len(staff)):
+            for t in range(len(timeslots)):
+                model.Add(sum(x[s, t, v] for v in range(len(venues))) <= 1)
+
+        # Solve
+        solver = cp_model.CpSolver()
+        status = solver.Solve(model)
+
+        # -------------------------
+        # OUTPUT
+        # -------------------------
+        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+
+            st.subheader("📊 Manager View")
+
+            for t in range(len(timeslots)):
+                st.write(f"### {timeslots[t]}")
+                for v in range(len(venues)):
+                    assigned = [
+                        staff[s]
+                        for s in range(len(staff))
+                        if solver.Value(x[s, t, v]) == 1
+                    ]
+                    st.write(f"{venues[v]['name']}: {assigned}")
+
+            st.subheader("🧑‍🤝‍🧑 Staff Schedules")
+
+            for s in range(len(staff)):
+                st.write(f"### {staff[s]}")
+                for t in range(len(timeslots)):
+                    for v in range(len(venues)):
+                        if solver.Value(x[s, t, v]) == 1:
+                            st.write(f"{timeslots[t]} → {venues[v]['name']}")
+
+        else:
+            st.error("No feasible schedule found.")
